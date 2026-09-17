@@ -1,0 +1,99 @@
+/**
+ * AI Toggle - schakelaar in de menubalk.
+ *
+ * Alle kleuren komen uit currentColor, zodat de schakelaar de kleur van het
+ * menu waarin hij staat overneemt en niet apart bijgehouden hoeft te worden.
+ */
+
+.ai-toggle-menu-item {
+	display: flex;
+	align-items: center;
+}
+
+.ai-toggle,
+.ai-toggle__form {
+	display: inline-flex;
+	align-items: center;
+	margin: 0;
+	padding: 0;
+}
+
+.ai-toggle__button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5em;
+	margin: 0;
+	padding: 0 15px;
+	border: 0;
+	background: none;
+	box-shadow: none;
+	font: inherit;
+	line-height: inherit;
+	color: inherit;
+	text-transform: none;
+	letter-spacing: inherit;
+	cursor: pointer;
+}
+
+.ai-toggle__button:hover,
+.ai-toggle__button:focus {
+	background: none;
+	color: inherit;
+	opacity: 0.85;
+}
+
+.ai-toggle__button:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+}
+
+.ai-toggle__track {
+	position: relative;
+	flex: 0 0 auto;
+	display: inline-block;
+	width: 2.25em;
+	height: 1.25em;
+	border: 1px solid currentColor;
+	border-radius: 1em;
+	background: transparent;
+	transition: background-color 0.15s ease;
+}
+
+.ai-toggle__thumb {
+	position: absolute;
+	top: 50%;
+	left: 0.1875em;
+	width: 0.8125em;
+	height: 0.8125em;
+	margin-top: -0.40625em;
+	border-radius: 50%;
+	background: currentColor;
+	transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+/*
+ * Aan-stand: de baan krijgt een doorschijnende vulling in plaats van een
+ * dichte, zodat het knopje (currentColor) zichtbaar blijft. Een dichte baan in
+ * currentColor werkt alleen goed als je de achtergrondkleur van het menu kent,
+ * en dat weten we hier niet.
+ */
+.ai-toggle__button[aria-checked="true"] .ai-toggle__track {
+	background: rgba(128, 128, 128, 0.4);
+	background: color-mix(in srgb, currentColor 32%, transparent);
+}
+
+.ai-toggle__button[aria-checked="true"] .ai-toggle__thumb {
+	transform: translateX(1em);
+}
+
+.ai-toggle__text {
+	white-space: nowrap;
+	font-size: 0.95em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ai-toggle__track,
+	.ai-toggle__thumb {
+		transition: none;
+	}
+}
