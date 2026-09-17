@@ -1,15 +1,15 @@
 <?php
 /**
  * Plugin Name:       AI Toggle
- * Plugin URI:        https://jmvdpal.nl/
- * Description:       Zet een schakelaar in de menubalk waarmee bezoekers de posts uit een gekozen categorie (de LLM-geschreven posts) uit de feed kunnen verbergen. De keuze wordt in een cookie onthouden en serverzijdig toegepast, zodat paginering en telling blijven kloppen.
- * Version:           1.0
+ * Description:       Adds a switch to your menu that lets visitors hide the posts of one chosen category from the blog feed, archives and search results. The choice is remembered in a cookie and applied server-side, so pagination and post counts stay correct.
+ * Version:           1.0.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
- * Author:            J.M. van der Pal (PCPal)
+ * Author:            Your Name
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       ai-toggle
+ * Domain Path:       /languages
  *
  * @package AI_Toggle
  */
@@ -19,29 +19,54 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Hele plugin in één class zodat er geen losse functies in de globale ruimte
- * belanden. Alles statisch; er is geen instantie-state nodig.
+ * The whole plugin lives in one class so that nothing ends up in the global
+ * namespace. Everything is static; there is no instance state to keep.
  */
-final class PCPal_AI_Toggle {
+final class AI_Toggle_Plugin {
 
-	const VERSION       = '1.0';
-	const OPT_CATEGORY  = 'pcpal_ai_toggle_category';
-	const OPT_LOCATIONS = 'pcpal_ai_toggle_locations';
-	const OPT_LABEL     = 'pcpal_ai_toggle_label';
-	const COOKIE        = 'pcpal_ai_toggle';
-	const FIELD_STATE   = 'pcpal_ai_toggle_state';
-	const FIELD_TARGET  = 'pcpal_ai_toggle_target';
-	const NONCE_ACTION  = 'pcpal_ai_toggle_switch';
+	const VERSION       = '1.0.0';
+	const OPT_VERSION   = 'ai_toggle_version';
+	const OPT_CATEGORY  = 'ai_toggle_category';
+	const OPT_LOCATIONS = 'ai_toggle_locations';
+	const OPT_LABEL     = 'ai_toggle_label';
+	const COOKIE        = 'ai_toggle';
+	const FIELD_STATE   = 'ai_toggle_state';
+	const FIELD_TARGET  = 'ai_toggle_target';
+	const NONCE_ACTION  = 'ai_toggle_switch';
+	const SETTINGS_PAGE = 'ai-toggle';
+	const OPTION_GROUP  = 'ai_toggle_settings';
 	const COOKIE_TTL    = YEAR_IN_SECONDS;
 
-	/** @var int|null Gevalideerde categorie-ID, of 0. Null = nog niet bepaald. */
+	/**
+	 * Option names used by builds of this plugin that predate the directory
+	 * release. Kept only so existing installs do not lose their settings.
+	 *
+	 * @var array<string,string> New option name => old option name.
+	 */
+	private static $legacy_options = array(
+		self::OPT_CATEGORY  => 'pcpal_ai_toggle_category',
+		self::OPT_LOCATIONS => 'pcpal_ai_toggle_locations',
+		self::OPT_LABEL     => 'pcpal_ai_toggle_label',
+	);
+
+	/**
+	 * Validated category ID, or 0. Null means "not determined yet".
+	 *
+	 * @var int|null
+	 */
 	private static $category = null;
 
-	/** Haakjes registreren. */
+	/**
+	 * Register the hooks.
+	 *
+	 * @return void
+	 */
 	public static function boot() {
+		add_action( 'plugins_loaded', array( __CLASS__, 'maybe_upgrade' ) );
+		add_action( 'init', array( __CLASS__, 'load_textdomain' ) );
 		add_action( 'init', array( __CLASS__, 'handle_switch' ), 1 );
-		// Late, want Education Zone Pro zet category__not_in op prioriteit 10
-		// met een simpele set() en gooit een eerdere waarde dus weg.
+		// Late on purpose: themes commonly set category__not_in at priority 10
+		// with a plain set(), which throws an earlier value away.
 		add_action( 'pre_get_posts', array( __CLASS__, 'filter_main_query' ), 9999 );
 		add_action( 'send_headers', array( __CLASS__, 'send_vary_header' ) );
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue_assets' ) );
@@ -49,25 +74,102 @@ final class PCPal_AI_Toggle {
 		add_filter( 'wp_nav_menu_items', array( __CLASS__, 'add_to_menu' ), 10, 2 );
 
 		add_shortcode( 'ai_toggle', array( __CLASS__, 'shortcode' ) );
-		// Alias voor de oude conceptversie, zodat bestaande plaatsingen blijven werken.
-		add_shortcode( 'pcpal_ai_toggle', array( __CLASS__, 'shortcode' ) );
 
 		add_action( 'admin_menu', array( __CLASS__, 'admin_menu' ) );
 		add_action( 'admin_init', array( __CLASS__, 'register_settings' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array( __CLASS__, 'action_links' ) );
 	}
 
+	/**
+	 * Load the bundled translations.
+	 *
+	 * @return void
+	 */
+	public static function load_textdomain() {
+		load_plugin_textdomain( 'ai-toggle', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+	}
+
 	/* ---------------------------------------------------------------------
-	 * Instellingen
+	 * Upgrade / install
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * De ingestelde categorie, maar alleen als die nog echt bestaat.
+	 * Run the data migration once per version.
 	 *
-	 * get_category( $id )->slug uit het concept was fataal zodra de categorie
-	 * verwijderd werd; get_term() geeft null of WP_Error die we hier afvangen.
+	 * WordPress does not fire the activation hook when a plugin is updated, so
+	 * the migration cannot live in activate() alone.
 	 *
-	 * @return int 0 als er niets (geldigs) is ingesteld.
+	 * @return void
+	 */
+	public static function maybe_upgrade() {
+		if ( self::VERSION === get_option( self::OPT_VERSION, '' ) ) {
+			return;
+		}
+
+		self::migrate_options();
+
+		update_option( self::OPT_VERSION, self::VERSION, true );
+	}
+
+	/**
+	 * Copy settings stored under the old option names, then drop the old rows.
+	 *
+	 * @return void
+	 */
+	private static function migrate_options() {
+		foreach ( self::$legacy_options as $new => $old ) {
+			$legacy = get_option( $old, null );
+			if ( null === $legacy ) {
+				continue;
+			}
+
+			if ( false === get_option( $new, false ) ) {
+				add_option( $new, $legacy );
+			}
+
+			delete_option( $old );
+		}
+
+		// Even older builds kept the category in a single option.
+		if ( false === get_option( self::OPT_CATEGORY, false ) ) {
+			$legacy = intval( get_option( 'pcpal_ai_category_id', 0 ) );
+			if ( $legacy > 0 ) {
+				add_option( self::OPT_CATEGORY, $legacy );
+				delete_option( 'pcpal_ai_category_id' );
+			}
+		}
+	}
+
+	/**
+	 * Set the defaults on activation.
+	 *
+	 * @return void
+	 */
+	public static function activate() {
+		self::migrate_options();
+
+		if ( false === get_option( self::OPT_CATEGORY, false ) ) {
+			add_option( self::OPT_CATEGORY, 0 );
+		}
+
+		if ( false === get_option( self::OPT_LOCATIONS, false ) ) {
+			add_option( self::OPT_LOCATIONS, array( 'primary' ) );
+		}
+
+		update_option( self::OPT_VERSION, self::VERSION, true );
+	}
+
+	/* ---------------------------------------------------------------------
+	 * Settings
+	 * ------------------------------------------------------------------ */
+
+	/**
+	 * The configured category, but only while it still exists.
+	 *
+	 * get_term() returns null or a WP_Error for a deleted term, which is
+	 * caught here so a removed category cannot take the site down.
+	 *
+	 * @return int 0 when nothing valid is configured.
 	 */
 	public static function category_id() {
 		if ( null !== self::$category ) {
@@ -88,7 +190,7 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Menulocaties waar de toggle in geprikt mag worden.
+	 * Menu locations the switch may be appended to.
 	 *
 	 * @return string[]
 	 */
@@ -101,47 +203,66 @@ final class PCPal_AI_Toggle {
 		return array_values( array_filter( array_map( 'strval', $stored ) ) );
 	}
 
-	/** @return string Zichtbaar label naast de schakelaar. */
+	/**
+	 * The visible label next to the switch.
+	 *
+	 * @return string
+	 */
 	public static function label() {
 		$label = (string) get_option( self::OPT_LABEL, '' );
 
-		return '' !== trim( $label ) ? $label : __( 'Verberg AI-content', 'ai-toggle' );
+		return '' !== trim( $label ) ? $label : __( 'Hide AI content', 'ai-toggle' );
 	}
 
 	/* ---------------------------------------------------------------------
-	 * Bezoekersstatus
+	 * Visitor state
 	 * ------------------------------------------------------------------ */
 
-	/** @return bool True als deze bezoeker de AI-posts verborgen wil hebben. */
+	/**
+	 * Whether this visitor wants the posts hidden.
+	 *
+	 * @return bool
+	 */
 	public static function is_hiding() {
-		return isset( $_COOKIE[ self::COOKIE ] ) && '1' === $_COOKIE[ self::COOKIE ];
+		if ( ! isset( $_COOKIE[ self::COOKIE ] ) ) {
+			return false;
+		}
+
+		return '1' === sanitize_key( wp_unslash( $_COOKIE[ self::COOKIE ] ) );
 	}
 
-	/** @return bool True als de plugin daadwerkelijk iets te doen heeft. */
+	/**
+	 * Whether the plugin actually has anything to do.
+	 *
+	 * @return bool
+	 */
 	public static function is_active() {
 		return self::category_id() > 0;
 	}
 
 	/**
-	 * Verwerkt het indrukken van de schakelaar: cookie zetten en terugsturen.
+	 * Handle a press of the switch: set the cookie and redirect back.
 	 *
-	 * Bewust een POST met nonce in plaats van een GET-parameter of een
-	 * fetch()-aanroep: een POST wordt niet geprefetcht of gecachet, en omdat we
-	 * daarna redirecten rendert de server de pagina meteen in de nieuwe stand.
-	 * Daarmee bestaat de race uit de conceptversie niet meer - er is geen
-	 * asynchrone aanroep die een eerdere beslissing kan overschrijven.
+	 * A POST with a nonce rather than a GET parameter or a fetch() call: a POST
+	 * is not prefetched or cached, and because the request is redirected
+	 * afterwards the server renders the page in the new state right away. There
+	 * is no asynchronous call that could overwrite an earlier decision.
+	 *
+	 * @return void
 	 */
 	public static function handle_switch() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Only used to detect the request; the nonce is verified below.
 		if ( ! isset( $_POST[ self::FIELD_STATE ] ) ) {
 			return;
 		}
 		if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
 			return;
 		}
-		// Verlopen nonce (pagina die een etmaal open heeft gestaan): niets
-		// wijzigen, maar wel terugsturen. De bezoeker krijgt dan een verse
-		// pagina met een geldige nonce in plaats van een knop die niets doet.
-		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_key( wp_unslash( $_POST['_wpnonce'] ) ), self::NONCE_ACTION ) ) {
+
+		// An expired nonce (a page that sat open for a day): change nothing, but
+		// still redirect. The visitor then gets a fresh page with a valid nonce
+		// instead of a button that silently does nothing.
+		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), self::NONCE_ACTION ) ) {
 			wp_safe_redirect( self::target_url(), 303 );
 			exit;
 		}
@@ -167,15 +288,15 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Waar we na het schakelen naartoe terugkeren.
+	 * Where to return to after flipping the switch.
 	 *
-	 * Alleen paden op deze site; wp_validate_redirect() vangt de rest af.
+	 * Site-local paths only; wp_validate_redirect() rejects the rest.
 	 *
 	 * @return string
 	 */
 	private static function target_url() {
-		$raw = isset( $_POST[ self::FIELD_TARGET ] ) ? wp_unslash( $_POST[ self::FIELD_TARGET ] ) : '';
-		$raw = is_string( $raw ) ? $raw : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- The value is only used as a site-local redirect target and is validated below.
+		$raw = isset( $_POST[ self::FIELD_TARGET ] ) ? sanitize_text_field( wp_unslash( $_POST[ self::FIELD_TARGET ] ) ) : '';
 
 		$fallback = home_url( '/' );
 		if ( '' === $raw || 0 !== strpos( $raw, '/' ) || 0 === strpos( $raw, '//' ) ) {
@@ -185,29 +306,31 @@ final class PCPal_AI_Toggle {
 		return wp_validate_redirect( home_url( $raw ), $fallback );
 	}
 
-	/** Het huidige pad + querystring, geschikt als terugkeerwaarde. */
+	/**
+	 * The current path plus query string, usable as a return value.
+	 *
+	 * @return string
+	 */
 	private static function current_path() {
 		$uri = isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
-		$uri = is_string( $uri ) ? $uri : '/';
-		$uri = esc_url_raw( $uri );
+		$uri = is_string( $uri ) ? sanitize_url( $uri ) : '/';
 
 		return ( '' !== $uri && 0 === strpos( $uri, '/' ) && 0 !== strpos( $uri, '//' ) ) ? $uri : '/';
 	}
 
 	/* ---------------------------------------------------------------------
-	 * De eigenlijke filtering
+	 * The actual filtering
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * Sluit de categorie uit in de hoofdquery van lijstweergaves.
+	 * Exclude the category from the main query of list views.
 	 *
-	 * Dit is de enige plek waar posts verdwijnen. Er wordt niets met CSS
-	 * verborgen: dat liet gaten vallen in de lijst en liet paginering,
-	 * max_num_pages en de infinite scroll van het thema niet meer kloppen.
-	 * Omdat de infinite scroll van Education Zone Pro /page/N/ gewoon met
-	 * cookies ophaalt, geldt dit filter ook voor bijgeladen pagina's.
+	 * This is the only place where posts disappear. Nothing is hidden with CSS:
+	 * that left holes in the list and made pagination, max_num_pages and any
+	 * load-more or infinite scroll disagree with what was actually shown.
 	 *
-	 * @param WP_Query $query De query die op het punt staat te draaien.
+	 * @param WP_Query $query The query that is about to run.
+	 * @return void
 	 */
 	public static function filter_main_query( $query ) {
 		if ( is_admin() || ! $query instanceof WP_Query || ! $query->is_main_query() ) {
@@ -225,14 +348,14 @@ final class PCPal_AI_Toggle {
 
 		$category = self::category_id();
 
-		// Het archief van de categorie zelf niet leegmaken: wie daar bewust
-		// naartoe navigeert, vraagt er expliciet om.
+		// Do not empty the archive of the category itself: anyone who navigates
+		// there is asking for it explicitly.
 		if ( $query->is_category( $category ) ) {
 			return;
 		}
 
-		// Toevoegen aan wat er al staat, niet vervangen: het thema sluit hier
-		// zelf ook categorieën uit en die moeten uitgesloten blijven.
+		// Add to whatever is already there instead of replacing it: themes
+		// exclude categories here too and those must stay excluded.
 		$excluded   = (array) $query->get( 'category__not_in' );
 		$excluded   = array_filter( array_map( 'intval', $excluded ) );
 		$excluded[] = $category;
@@ -241,7 +364,9 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * De uitvoer hangt van een cookie af, dus dat moet elke cache weten.
+	 * The output depends on a cookie, so every cache needs to know that.
+	 *
+	 * @return void
 	 */
 	public static function send_vary_header() {
 		if ( is_admin() || is_singular() || ! self::is_active() ) {
@@ -256,9 +381,9 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Body-class zodat een thema of child-thema erop kan inhaken.
+	 * Body class so a theme or child theme can hook into the state.
 	 *
-	 * @param string[] $classes Bestaande classes.
+	 * @param string[] $classes Existing classes.
 	 * @return string[]
 	 */
 	public static function body_class( $classes ) {
@@ -270,51 +395,34 @@ final class PCPal_AI_Toggle {
 	}
 
 	/* ---------------------------------------------------------------------
-	 * Weergave
+	 * Front end
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * Stylesheet meegeven, maar alleen als de plugin echt iets doet.
+	 * Enqueue the stylesheet, but only when the plugin actually does something.
 	 *
-	 * Inline en niet als los bestand: Education Zone Pro haalt via
-	 * style_loader_src de ?ver= van alle stylesheets af, en Cloudflare cachet
-	 * statische bestanden. Een gewijzigde assets/ai-toggle.css zou daardoor
-	 * dagenlang niet bij bezoekers aankomen. Het gaat om nog geen twee
-	 * kilobyte, dus inline kost niets en is altijd actueel.
+	 * @return void
 	 */
 	public static function enqueue_assets() {
 		if ( ! self::is_active() ) {
 			return;
 		}
 
-		wp_register_style( 'ai-toggle', false, array(), self::VERSION );
-		wp_enqueue_style( 'ai-toggle' );
-		wp_add_inline_style( 'ai-toggle', self::css() );
+		wp_enqueue_style(
+			'ai-toggle',
+			plugins_url( 'assets/ai-toggle.css', __FILE__ ),
+			array(),
+			self::VERSION
+		);
 	}
 
 	/**
-	 * De stylesheet als tekst. assets/ai-toggle.css blijft de bron.
+	 * Build the switch.
 	 *
-	 * @return string
-	 */
-	private static function css() {
-		static $css = null;
-
-		if ( null === $css ) {
-			$file = plugin_dir_path( __FILE__ ) . 'assets/ai-toggle.css';
-			$css  = is_readable( $file ) ? (string) file_get_contents( $file ) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-		}
-
-		return $css;
-	}
-
-	/**
-	 * Bouwt de schakelaar.
+	 * A form with a submit button, no JavaScript. It therefore works without JS
+	 * and can by definition not get out of step with what the server renders.
 	 *
-	 * Een formulier met een submit-knop, geen JavaScript. Werkt dus ook zonder
-	 * JS en kan per definitie niet uit de pas lopen met wat de server rendert.
-	 *
-	 * @return string HTML, of een lege string als er niets is ingesteld.
+	 * @return string HTML, or an empty string when nothing is configured.
 	 */
 	public static function render() {
 		if ( ! self::is_active() ) {
@@ -324,6 +432,9 @@ final class PCPal_AI_Toggle {
 		$hiding = self::is_hiding();
 		$next   = $hiding ? '0' : '1';
 		$label  = self::label();
+		$title  = $hiding
+			? __( 'Show the AI content in the feed again', 'ai-toggle' )
+			: __( 'Hide the AI content in the feed', 'ai-toggle' );
 
 		ob_start();
 		?>
@@ -337,7 +448,7 @@ final class PCPal_AI_Toggle {
 					class="ai-toggle__button"
 					role="switch"
 					aria-checked="<?php echo $hiding ? 'true' : 'false'; ?>"
-					title="<?php echo esc_attr( $hiding ? __( 'Toon de AI-content weer in de feed', 'ai-toggle' ) : __( 'Verberg de AI-content in de feed', 'ai-toggle' ) ); ?>"
+					title="<?php echo esc_attr( $title ); ?>"
 				>
 					<span class="ai-toggle__track" aria-hidden="true"><span class="ai-toggle__thumb"></span></span>
 					<span class="ai-toggle__text"><?php echo esc_html( $label ); ?></span>
@@ -350,7 +461,7 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Shortcode-variant, voor plaatsing buiten het menu.
+	 * Shortcode variant, for placement outside the menu.
 	 *
 	 * @return string
 	 */
@@ -359,13 +470,13 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Hangt de schakelaar achter de menu-items van de gekozen locatie(s).
+	 * Append the switch to the menu items of the chosen location(s).
 	 *
-	 * Strikt op theme_location matchen; het concept plakte de toggle ook in
-	 * elk menu zonder locatie, dus ook in footer- en widgetmenu's.
+	 * Matched strictly on theme_location, so the switch does not end up in
+	 * footer or widget menus that have no location.
 	 *
-	 * @param string   $items Menu-HTML tot nu toe.
-	 * @param stdClass $args  Argumenten van wp_nav_menu().
+	 * @param string   $items Menu HTML so far.
+	 * @param stdClass $args  Arguments of wp_nav_menu().
 	 * @return string
 	 */
 	public static function add_to_menu( $items, $args ) {
@@ -387,24 +498,32 @@ final class PCPal_AI_Toggle {
 	}
 
 	/* ---------------------------------------------------------------------
-	 * Beheerscherm
+	 * Admin screen
 	 * ------------------------------------------------------------------ */
 
-	/** Instellingenpagina onder Instellingen. */
+	/**
+	 * Settings page under Settings.
+	 *
+	 * @return void
+	 */
 	public static function admin_menu() {
 		add_options_page(
 			__( 'AI Toggle', 'ai-toggle' ),
 			__( 'AI Toggle', 'ai-toggle' ),
 			'manage_options',
-			'ai-toggle',
+			self::SETTINGS_PAGE,
 			array( __CLASS__, 'settings_page' )
 		);
 	}
 
-	/** Opties registreren, met sanitizing per optie. */
+	/**
+	 * Register the options, each with its own sanitizing callback.
+	 *
+	 * @return void
+	 */
 	public static function register_settings() {
 		register_setting(
-			'ai_toggle_settings',
+			self::OPTION_GROUP,
 			self::OPT_CATEGORY,
 			array(
 				'type'              => 'integer',
@@ -414,7 +533,7 @@ final class PCPal_AI_Toggle {
 		);
 
 		register_setting(
-			'ai_toggle_settings',
+			self::OPTION_GROUP,
 			self::OPT_LOCATIONS,
 			array(
 				'type'              => 'array',
@@ -424,7 +543,7 @@ final class PCPal_AI_Toggle {
 		);
 
 		register_setting(
-			'ai_toggle_settings',
+			self::OPTION_GROUP,
 			self::OPT_LABEL,
 			array(
 				'type'              => 'string',
@@ -435,7 +554,9 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * @param mixed $value Ruwe invoer.
+	 * Accept a category ID only when the term exists.
+	 *
+	 * @param mixed $value Raw input.
 	 * @return int
 	 */
 	public static function sanitize_category( $value ) {
@@ -450,9 +571,9 @@ final class PCPal_AI_Toggle {
 	}
 
 	/**
-	 * Alleen locaties die het actieve thema ook echt registreert.
+	 * Accept only locations the active theme actually registers.
 	 *
-	 * @param mixed $value Ruwe invoer.
+	 * @param mixed $value Raw input.
 	 * @return string[]
 	 */
 	public static function sanitize_locations( $value ) {
@@ -473,7 +594,11 @@ final class PCPal_AI_Toggle {
 		return $clean;
 	}
 
-	/** De instellingenpagina zelf. */
+	/**
+	 * The settings page itself.
+	 *
+	 * @return void
+	 */
 	public static function settings_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -486,28 +611,29 @@ final class PCPal_AI_Toggle {
 		$missing    = ( $selected > 0 && 0 === self::category_id() );
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'AI Toggle', 'ai-toggle' ); ?></h1>
+			<h1><?php echo esc_html__( 'AI Toggle', 'ai-toggle' ); ?></h1>
 
 			<?php if ( $missing ) : ?>
 				<div class="notice notice-warning">
-					<p><?php esc_html_e( 'De eerder gekozen categorie bestaat niet meer. De schakelaar wordt niet getoond totdat je een bestaande categorie kiest.', 'ai-toggle' ); ?></p>
+					<p><?php echo esc_html__( 'The category you selected earlier no longer exists. The switch stays hidden until you pick a category that does exist.', 'ai-toggle' ); ?></p>
 				</div>
 			<?php endif; ?>
 
 			<form method="post" action="options.php">
-				<?php settings_fields( 'ai_toggle_settings' ); ?>
+				<?php settings_fields( self::OPTION_GROUP ); ?>
 				<table class="form-table" role="presentation">
 					<tr>
 						<th scope="row">
-							<label for="ai-toggle-category"><?php esc_html_e( 'Te verbergen categorie', 'ai-toggle' ); ?></label>
+							<label for="ai-toggle-category"><?php echo esc_html__( 'Category to hide', 'ai-toggle' ); ?></label>
 						</th>
 						<td>
 							<select name="<?php echo esc_attr( self::OPT_CATEGORY ); ?>" id="ai-toggle-category">
-								<option value="0"><?php esc_html_e( '— Geen (schakelaar uitgeschakeld) —', 'ai-toggle' ); ?></option>
+								<option value="0"><?php echo esc_html__( '— None (switch disabled) —', 'ai-toggle' ); ?></option>
 								<?php foreach ( $categories as $category ) : ?>
 									<option value="<?php echo esc_attr( $category->term_id ); ?>" <?php selected( $selected, $category->term_id ); ?>>
 										<?php
 										printf(
+											/* translators: 1: category name, 2: number of posts in that category */
 											'%1$s (%2$d)',
 											esc_html( $category->name ),
 											(int) $category->count
@@ -516,14 +642,14 @@ final class PCPal_AI_Toggle {
 									</option>
 								<?php endforeach; ?>
 							</select>
-							<p class="description"><?php esc_html_e( 'Posts uit deze categorie verdwijnen uit de feed zodra een bezoeker de schakelaar aanzet. Zonder categorie doet de plugin niets.', 'ai-toggle' ); ?></p>
+							<p class="description"><?php echo esc_html__( 'Posts in this category disappear from the feed as soon as a visitor turns the switch on. Without a category the plugin does nothing.', 'ai-toggle' ); ?></p>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php esc_html_e( 'Toon de schakelaar in', 'ai-toggle' ); ?></th>
+						<th scope="row"><?php echo esc_html__( 'Show the switch in', 'ai-toggle' ); ?></th>
 						<td>
 							<?php if ( empty( $registered ) ) : ?>
-								<p><?php esc_html_e( 'Dit thema registreert geen menulocaties.', 'ai-toggle' ); ?></p>
+								<p><?php echo esc_html__( 'This theme does not register any menu locations.', 'ai-toggle' ); ?></p>
 							<?php else : ?>
 								<fieldset>
 									<?php foreach ( $registered as $slug => $description ) : ?>
@@ -540,12 +666,12 @@ final class PCPal_AI_Toggle {
 									<?php endforeach; ?>
 								</fieldset>
 							<?php endif; ?>
-							<p class="description"><?php esc_html_e( 'Vink niets aan om de schakelaar alleen via de shortcode [ai_toggle] te plaatsen.', 'ai-toggle' ); ?></p>
+							<p class="description"><?php echo esc_html__( 'Check nothing to place the switch with the [ai_toggle] shortcode only.', 'ai-toggle' ); ?></p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row">
-							<label for="ai-toggle-label"><?php esc_html_e( 'Tekst naast de schakelaar', 'ai-toggle' ); ?></label>
+							<label for="ai-toggle-label"><?php echo esc_html__( 'Text next to the switch', 'ai-toggle' ); ?></label>
 						</th>
 						<td>
 							<input
@@ -554,7 +680,7 @@ final class PCPal_AI_Toggle {
 								id="ai-toggle-label"
 								name="<?php echo esc_attr( self::OPT_LABEL ); ?>"
 								value="<?php echo esc_attr( (string) get_option( self::OPT_LABEL, '' ) ); ?>"
-								placeholder="<?php echo esc_attr__( 'Verberg AI-content', 'ai-toggle' ); ?>"
+								placeholder="<?php echo esc_attr__( 'Hide AI content', 'ai-toggle' ); ?>"
 							/>
 						</td>
 					</tr>
@@ -562,47 +688,33 @@ final class PCPal_AI_Toggle {
 				<?php submit_button(); ?>
 			</form>
 
-			<h2><?php esc_html_e( 'Hoe het werkt', 'ai-toggle' ); ?></h2>
+			<h2><?php echo esc_html__( 'How it works', 'ai-toggle' ); ?></h2>
 			<p>
-				<?php esc_html_e( 'De keuze van de bezoeker staat in een cookie en wordt serverzijdig toegepast op de hoofdquery van de blogpagina, archieven en zoekresultaten. Daardoor kloppen de paginering en het aantal pagina\'s altijd met wat er te zien is. Losse berichten en het archief van de categorie zelf blijven bereikbaar; de schakelaar filtert de feed, hij blokkeert niets.', 'ai-toggle' ); ?>
+				<?php echo esc_html__( 'The visitor\'s choice is stored in a cookie and applied server-side to the main query of the blog page, the archives and the search results. Pagination and the number of pages therefore always match what is on screen. Single posts and the archive of the category itself stay reachable; the switch filters the feed, it does not block anything.', 'ai-toggle' ); ?>
 			</p>
 		</div>
 		<?php
 	}
 
 	/**
-	 * Settings-link op de pluginpagina.
+	 * Settings link on the plugins screen.
 	 *
-	 * @param string[] $links Bestaande links.
+	 * @param string[] $links Existing links.
 	 * @return string[]
 	 */
 	public static function action_links( $links ) {
 		$settings = sprintf(
 			'<a href="%s">%s</a>',
-			esc_url( admin_url( 'options-general.php?page=ai-toggle' ) ),
-			esc_html__( 'Instellingen', 'ai-toggle' )
+			esc_url( admin_url( 'options-general.php?page=' . self::SETTINGS_PAGE ) ),
+			esc_html__( 'Settings', 'ai-toggle' )
 		);
 
 		array_unshift( $links, $settings );
 
 		return $links;
 	}
-
-	/**
-	 * Bij activering: neem de instelling van de oude conceptversie over.
-	 */
-	public static function activate() {
-		if ( false === get_option( self::OPT_CATEGORY, false ) ) {
-			$legacy = intval( get_option( 'pcpal_ai_category_id', 0 ) );
-			add_option( self::OPT_CATEGORY, $legacy > 0 ? $legacy : 0 );
-		}
-
-		if ( false === get_option( self::OPT_LOCATIONS, false ) ) {
-			add_option( self::OPT_LOCATIONS, array( 'primary' ) );
-		}
-	}
 }
 
-register_activation_hook( __FILE__, array( 'PCPal_AI_Toggle', 'activate' ) );
+register_activation_hook( __FILE__, array( 'AI_Toggle_Plugin', 'activate' ) );
 
-PCPal_AI_Toggle::boot();
+AI_Toggle_Plugin::boot();

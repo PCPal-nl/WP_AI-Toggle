@@ -1,0 +1,74 @@
+# Dutch translation for the AI Toggle plugin.
+# This file is distributed under the GPL-2.0-or-later license.
+msgid ""
+msgstr ""
+"Project-Id-Version: AI Toggle 1.0.0\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/ai-toggle/\n"
+"POT-Creation-Date: 2026-09-17T14:00:00+00:00\n"
+"PO-Revision-Date: 2026-09-17 14:00+0000\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nl_NL\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Domain: ai-toggle\n"
+
+#: ai-toggle.php:511 ai-toggle.php:512 ai-toggle.php:614
+msgid "AI Toggle"
+msgstr "AI Toggle"
+
+#: ai-toggle.php:627
+msgid "Category to hide"
+msgstr "Te verbergen categorie"
+
+#: ai-toggle.php:669
+msgid "Check nothing to place the switch with the [ai_toggle] shortcode only."
+msgstr "Vink niets aan om de schakelaar alleen via de shortcode [ai_toggle] te plaatsen."
+
+#: ai-toggle.php:214 ai-toggle.php:683
+msgid "Hide AI content"
+msgstr "Verberg AI-content"
+
+#: ai-toggle.php:437
+msgid "Hide the AI content in the feed"
+msgstr "Verberg de AI-content in de feed"
+
+#: ai-toggle.php:691
+msgid "How it works"
+msgstr "Hoe het werkt"
+
+#: ai-toggle.php:645
+msgid "Posts in this category disappear from the feed as soon as a visitor turns the switch on. Without a category the plugin does nothing."
+msgstr "Posts uit deze categorie verdwijnen uit de feed zodra een bezoeker de schakelaar aanzet. Zonder categorie doet de plugin niets."
+
+#: ai-toggle.php:709
+msgid "Settings"
+msgstr "Instellingen"
+
+#: ai-toggle.php:436
+msgid "Show the AI content in the feed again"
+msgstr "Toon de AI-content weer in de feed"
+
+#: ai-toggle.php:649
+msgid "Show the switch in"
+msgstr "Toon de schakelaar in"
+
+#: ai-toggle.php:674
+msgid "Text next to the switch"
+msgstr "Tekst naast de schakelaar"
+
+#: ai-toggle.php:618
+msgid "The category you selected earlier no longer exists. The switch stays hidden until you pick a category that does exist."
+msgstr "De eerder gekozen categorie bestaat niet meer. De schakelaar wordt niet getoond totdat je een bestaande categorie kiest."
+
+#: ai-toggle.php:693
+msgid "The visitor's choice is stored in a cookie and applied server-side to the main query of the blog page, the archives and the search results. Pagination and the number of pages therefore always match what is on screen. Single posts and the archive of the category itself stay reachable; the switch filters the feed, it does not block anything."
+msgstr "De keuze van de bezoeker staat in een cookie en wordt serverzijdig toegepast op de hoofdquery van de blogpagina, archieven en zoekresultaten. Daardoor kloppen de paginering en het aantal pagina's altijd met wat er te zien is. Losse berichten en het archief van de categorie zelf blijven bereikbaar; de schakelaar filtert de feed, hij blokkeert niets."
+
+#: ai-toggle.php:652
+msgid "This theme does not register any menu locations."
+msgstr "Dit thema registreert geen menulocaties."
+
+#: ai-toggle.php:631
+msgid "— None (switch disabled) —"
+msgstr "— Geen (schakelaar uitgeschakeld) —"
